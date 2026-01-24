@@ -1,0 +1,24 @@
+{
+  "seed": 1234,
+  "agent_config": {
+    "name": "reinforce",
+    "episodes": 500,
+    "alpha": 0.0001,
+    "gamma": 0.99,
+    "entropy_coef": 0.2,
+    "num_steps": 40,
+    "encoder_path": "components/data/model_weights/feature_encoder_15_512_32_512.pth"
+  },
+  "env_config": {
+    "render": false,
+    "rho": 0.001
+  },
+  "navigation_config": {
+    "use_transformer": false,
+    "rgb_dim": 512,
+    "action_dim": 32,
+    "sg_dim": 512,
+    "policy_hidden": 512,
+    "hidden_dim": 512
+  }
+}

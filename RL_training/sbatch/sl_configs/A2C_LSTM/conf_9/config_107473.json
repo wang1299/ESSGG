@@ -1,0 +1,27 @@
+{
+  "seed": 107473,
+  "agent_config": {
+    "name": "a2c",
+    "episodes": 1000,
+    "alpha": 0.0001,
+    "gamma": 0.99,
+    "entropy_coef": 0.03,
+    "value_coef": 1,
+    "num_steps": 40,
+    "encoder_path": "components/data/model_weights/feature_encoder_15_512_32_512.pth",
+    "seed": 107473
+  },
+  "env_config": {
+    "render": false,
+    "seed": 107473,
+    "rho": 0.014
+  },
+  "navigation_config": {
+    "rgb_dim": 512,
+    "action_dim": 32,
+    "sg_dim": 512,
+    "policy_hidden": 512,
+    "use_transformer": false,
+    "seed": 107473
+  }
+}
