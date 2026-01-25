@@ -36,7 +36,8 @@ def main(config, args):
             dino_detector = GroundingDINODetector(
                 config_path=dino_config,
                 checkpoint_path=dino_weights,
-                text_prompt="chair . table . bed . sofa . tv . plant", # 建议后续根据 config/navigation.json 动态生成
+                # Updated text prompt using exactly the 64 categories from object_types.json
+                text_prompt="Cabinet . Counter Top . Faucet . Floor . House Plant . Microwave . Pot . Potato . Sink Basin . Soap Bottle . Stove Burner . Stove Knob . Window . Apple . Chair . Dining Table . Plate . Bowl . Knife . Pan . Tomato . Drawer . Garbage Can . Fridge . Bread . Lettuce . Sink . Spatula . Toaster . Cup . Pepper Shaker . Salt Shaker . Butter Knife . Spoon . Coffee Machine . Light Switch . Mug . Dish Sponge . Fork . Ladle . Wine Bottle . Cell Phone . Kettle . Egg . Paper Towel Roll . Book . Credit Card . Stool . Blinds . Aluminum Foil . Mirror . Shelf . Side Table . Shelving Unit . Statue . Vase . Bottle . Garbage Bag . Pencil . Curtains . Spray Bottle . Pen . Safe . Wall .",
                 box_threshold=0.20,  # [Modified] Lower threshold
                 text_threshold=0.20  # [Modified] Lower threshold
             )
@@ -100,7 +101,13 @@ def main(config, args):
         agent.scene_numbers = agent.all_scene_numbers[agent.num_scenes : agent.num_scenes + 3]
         
         # 运行评估
-        runner = RLEvalRunner(env=env, agent=agent, device=device)
+        runner = RLEvalRunner(
+            env=env, 
+            agent=agent, 
+            device=device,
+            save_dir=args.save_frames_to,  # [Modified] Pass save directory
+            total_episodes=args.num_episodes # [Modified]
+        )
         runner.run()
         
     env.close()
@@ -133,17 +140,45 @@ if __name__ == "__main__":
     parser.add_argument("--use_dino", action="store_true", help="Use Grounding DINO for perception.")
     # [新增] 预计算模式开关
     parser.add_argument("--precomputed", action="store_true", help="Use precomputed environment (faster but needs data).")
+    # [新增] 可视化保存
+    parser.add_argument("--save_frames_to", type=str, default=None, help="Directory to save visualization frames. If not set, no frames are saved.")
+    # [新增] 评估集数
+    parser.add_argument("--num_episodes", type=int, default=100, help="Number of episodes to evaluate.")
     
     args = parser.parse_args()
 
-    # Iterate over each configuration file in args.conf_path
-    conf_files = Path(args.conf_path).rglob("*.json")
-    conf_list = list(conf_files)
+    # Load all configs
+    full_config = {}
+    config_dir = Path(args.conf_path)
     
-    if len(conf_list) == 0:
-        print(f"No config files found in {args.conf_path}")
-    else:
-        # 这里默认只读第一个配置，通常够用了
-        conf = read_config(conf_list[0])
-        set_seeds(conf["seed"])
-        main(conf, args)
+    agent_conf_path = config_dir / "agent.json"
+    env_conf_path = config_dir / "env.json"
+    nav_conf_path = config_dir / "navigation.json"
+    
+    if agent_conf_path.exists():
+        full_config["agent_config"] = read_config(str(agent_conf_path))
+    if env_conf_path.exists():
+        full_config["env_config"] = read_config(str(env_conf_path))
+    if nav_conf_path.exists():
+        full_config["navigation_config"] = read_config(str(nav_conf_path))
+        
+    # Validation
+    if "agent_config" not in full_config or "env_config" not in full_config or "navigation_config" not in full_config:
+        print("[ERROR] Missing one of detection/agent/env/navigation config files in: ", args.conf_path)
+        # Fallback to current dangerous behavior or just exit
+        # Try to find seed from what we have
+        pass
+
+    seed = full_config.get("env_config", {}).get("seed", 42)
+    set_seeds(seed)
+
+    # [Smart Config Override]
+    # If the model path implies a specific architecture, override the config.
+    if "LSTM" in str(args.model_path) and full_config["navigation_config"].get("use_transformer", False):
+        print("[INFO] Model path contains 'LSTM' but config says Transformer. Switching to LSTM.")
+        full_config["navigation_config"]["use_transformer"] = False
+    elif "Transformer" in str(args.model_path) and not full_config["navigation_config"].get("use_transformer", False):
+        print("[INFO] Model path contains 'Transformer' but config says LSTM. Switching to Transformer.")
+        full_config["navigation_config"]["use_transformer"] = True
+    
+    main(full_config, args)

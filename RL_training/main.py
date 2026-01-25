@@ -36,7 +36,8 @@ def main(config):
             dino_detector = GroundingDINODetector(
                 config_path=dino_config,
                 checkpoint_path=dino_weights,
-                text_prompt="chair . table . bed . sofa . tv . plant",
+                # Updated text prompt using exactly the 64 categories from object_types.json
+                text_prompt="Cabinet . Counter Top . Faucet . Floor . House Plant . Microwave . Pot . Potato . Sink Basin . Soap Bottle . Stove Burner . Stove Knob . Window . Apple . Chair . Dining Table . Plate . Bowl . Knife . Pan . Tomato . Drawer . Garbage Can . Fridge . Bread . Lettuce . Sink . Spatula . Toaster . Cup . Pepper Shaker . Salt Shaker . Butter Knife . Spoon . Coffee Machine . Light Switch . Mug . Dish Sponge . Fork . Ladle . Wine Bottle . Cell Phone . Kettle . Egg . Paper Towel Roll . Book . Credit Card . Stool . Blinds . Aluminum Foil . Mirror . Shelf . Side Table . Shelving Unit . Statue . Vase . Bottle . Garbage Bag . Pencil . Curtains . Spray Bottle . Pen . Safe . Wall .",
                 box_threshold=0.20,
                 text_threshold=0.20
             )
@@ -49,13 +50,16 @@ def main(config):
             rho=env_config["rho"], 
             max_actions=agent_config["num_steps"],
             use_detector=(dino_detector is not None),
-            detector=dino_detector
+            detector=dino_detector,
+            # Keep this consistent with GroundingDINO box/text thresholds; 0.3 is too strict for tiny objects.
+            det_score_thr=0.20 if dino_detector is not None else 0.30,
         )
     else:
         env = PrecomputedThorEnv(
             rho=env_config["rho"], 
             max_actions=agent_config["num_steps"],
-            detector=dino_detector # <--- [关键] 传入检测器
+            detector=dino_detector, # <--- [关键] 传入检测器
+            det_score_thr=0.20 if dino_detector is not None else 0.30,
         )
 
     # Load agent from encoder & policy weights
@@ -69,7 +73,8 @@ def main(config):
     agent.load_weights(encoder_path=encoder_path, device=device)
 
     # RL training runner
-    runner = RLTrainRunner(env=env, agent=agent, device=device)
+    # [Mod] Pass save_frames_to
+    runner = RLTrainRunner(env=env, agent=agent, device=device, save_dir=args.save_frames_to)
     runner.run()
     env.close()
     print("[INFO] Training completed.")
@@ -113,13 +118,54 @@ if __name__ == "__main__":
     parser.add_argument("--precomputed", action="store_true", help="Use precomputed environment.")
     # [新增] 命令行参数控制是否开启 DINO
     parser.add_argument("--use_dino", action="store_true", help="Use Grounding DINO for perception.")
+    # [New] Training Visualization
+    parser.add_argument("--save_frames_to", type=str, default=None, help="Directory to save training frames (e.g. debug_train_viz).")
     
     args = parser.parse_args()
 
-    # Iterate over each configuration file in args.conf_path
-    conf_files = Path(args.conf_path).rglob("*.json")
-    for conf_file in conf_files:
-        print(f"[INFO] Running with configuration: {conf_file}")
-        conf = read_config(conf_file)
-        set_seeds(conf["seed"])
+    # Support both single-file configs (legacy/run_config) and directory-based configs (config/)
+    config_path = Path(args.conf_path)
+    if config_path.is_dir():
+        # Check if it contains the split config files
+        if (config_path / "agent.json").exists():
+             # Load structured config
+            full_config = {}
+            if (config_path / "agent.json").exists():
+                full_config["agent_config"] = read_config(str(config_path / "agent.json"))
+            if (config_path / "env.json").exists():
+                full_config["env_config"] = read_config(str(config_path / "env.json"))
+            if (config_path / "navigation.json").exists():
+                full_config["navigation_config"] = read_config(str(config_path / "navigation.json"))
+            
+            seed = full_config.get("env_config", {}).get("seed", 42)
+            set_seeds(seed)
+            print(f"[INFO] Running training with SPLIT config from: {args.conf_path}")
+            main(full_config)
+            exit(0)
+        else:
+            # Fallback: Iterate over all json files in directory (Old Behavior)
+            conf_files = sorted(list(config_path.rglob("*.json")))
+            if not conf_files:
+                print(f"[ERROR] No json config files found in {args.conf_path}")
+                exit(1)
+            
+            for conf_file in conf_files:
+                print(f"[INFO] Running with SINGLE-FILE configuration: {conf_file}")
+                try:
+                    conf = read_config(str(conf_file))
+                    # Basic validation to ensure it's a full config
+                    if "agent_config" in conf:
+                        set_seeds(conf.get("seed", 42))
+                        main(conf)
+                    else:
+                        print(f"[WARNING] Skipping {conf_file} - missing 'agent_config' key")
+                except Exception as e:
+                    print(f"[ERROR] Failed to run config {conf_file}: {e}")
+            exit(0)
+    else:
+        # Single file provided directly
+        print(f"[INFO] Running with SINGLE configuration file: {args.conf_path}")
+        conf = read_config(str(config_path))
+        set_seeds(conf.get("seed", 42))
         main(conf)
+        exit(0)
