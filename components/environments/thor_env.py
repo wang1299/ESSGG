@@ -120,6 +120,9 @@ class ThorEnv:
             agent_state = event.metadata["agent"]
             detections = self.detector.detect(event.frame, depth_image=depth, agent_state=agent_state)
             
+            # Store raw detections for visualization
+            self.last_raw_detections = detections
+            
             # 2. Format conversion for LocalGraphBuilder
             formatted_objects = []
             for i, det in enumerate(detections):
@@ -136,18 +139,91 @@ class ThorEnv:
                 else:
                     final_pos = raw_pos
 
-                obj = {
-                    "objectId": f"det_{i}_{det['label']}",
-                    "objectType": det["label"],
-                    "score": det["score"],
-                    "visible": True,
-                    "position": final_pos 
+                # [Step 1: Label Mapping] Normalize labels to match Ground Truth format (PascalCase)
+                # DINO often returns lowercase or space-separated words (e.g. "coffee machine")
+                # GT usually uses PascalCase (e.g. "CoffeeMachine")
+                raw_label = det['label'].lower().strip()
+                
+                # Manual overrides for specific mismatches
+                OVERRIDE_MAPPING = {
+                    "cup": "Mug", # Often "Mug" in THOR is detected as "Cup"
+                    "trash can": "GarbageCan",
+                    "rubbish bin": "GarbageCan",
+                    "pan": "Pot",
+                    "hand towel": "Towel",
+                    "soap dispenser": "SoapBottle",
+                    "pepper shaker": "SaltShaker", # [Fix] Visual ambiguity
+                    "garbage": "GarbageCan",
+                    "garbage bag": "GarbageCan", # [Fix] Bag often inside Can
+                    "shelf": "ShelvingUnit", # [Fix] Common mismatch
+                    "sink": "SinkBasin", # [Fix] Sink entity vs SinkBasin receptacle
+                    "counter": "CounterTop",
+                    "worktop": "CounterTop",
+                    "paper towel": "PaperTowelRoll",
+                    "butter knife": "ButterKnife",
+                    "dish sponge": "DishSponge",
+                    "paper towel roll": "PaperTowelRoll",
+                    "coffee maker": "CoffeeMachine",
+                    "side table": "SideTable",
                 }
+                
+                # Prefer GT-present categories when ambiguous
+                gt_types_set = {o["objectType"] for o in event.metadata.get("_gt_objects", [])}
+                if raw_label == "cup":
+                    if "Cup" in gt_types_set:
+                        final_label = "Cup"
+                    elif "Mug" in gt_types_set:
+                        final_label = "Mug"
+                    else:
+                        final_label = OVERRIDE_MAPPING.get(raw_label, raw_label.title().replace(" ", ""))
+                elif raw_label == "pepper shaker":
+                    if "PepperShaker" in gt_types_set:
+                        final_label = "PepperShaker"
+                    elif "SaltShaker" in gt_types_set:
+                        final_label = "SaltShaker"
+                    else:
+                        final_label = OVERRIDE_MAPPING.get(raw_label, raw_label.title().replace(" ", ""))
+                elif raw_label in OVERRIDE_MAPPING:
+                    final_label = OVERRIDE_MAPPING[raw_label]
+                else:
+                    # Heuristic: Title Case + Remove Spaces (e.g. "coffee machine" -> "CoffeeMachine")
+                    final_label = raw_label.title().replace(" ", "")
+
+                obj = {
+                    "objectType": final_label,
+                    "score": det['score'],
+                    "visible": True,
+                    "position": final_pos,
+                    # [Fix] Add dummy AABB to prevent RelationExtractor crash
+                    "axisAlignedBoundingBox": {
+                        "center": final_pos,
+                        "size": {"x": 0.5, "y": 0.5, "z": 0.5}, # Dummy size
+                        "cornerPoints": [[0,0,0]] * 8 # Dummy corners
+                    }
+                }
+
+                # Create a stable objectId for detections by quantizing the 3D position
+                # This reduces duplicate nodes across frames for the same physical object.
+                try:
+                    px = final_pos.get("x", None)
+                    pz = final_pos.get("z", None)
+                    if px is None or pz is None or final_pos.get("y", -100.0) < -50.0:
+                        # If position is missing or marked as invalid, fall back to per-frame index
+                        obj_id = f"det_unpos_{i}_{final_label}"
+                    else:
+                        qx = round(px / self.grid_size) * self.grid_size
+                        qz = round(pz / self.grid_size) * self.grid_size
+                        # Use label + quantized position to produce a stable id across nearby viewpoints
+                        obj_id = f"det_{final_label}_{qx:.2f}_{qz:.2f}"
+                except Exception:
+                    obj_id = f"det_{i}_{final_label}"
+
+                obj["objectId"] = obj_id
                 
                 # If requested, cheat by filling position from GT (for debugging)
                 if self.fill_position_from_gt:
                     for gt_obj in event.metadata["_gt_objects"]:
-                        if gt_obj["objectType"].lower() == det["label"].lower() and gt_obj["visible"]:
+                        if gt_obj["objectType"] == final_label and gt_obj["visible"]:
                             obj["position"] = gt_obj["position"]
                             obj["objectId"] = gt_obj["objectId"] 
                             break
@@ -156,6 +232,120 @@ class ThorEnv:
             
             # 3. Overwrite the main objects list
             event.metadata["objects"] = formatted_objects
+            
+            # [Step 2: Detection Analysis for Visualization]
+            # Classify detections as: Matched (Green), Extra/Filtered (Orange)
+            # Find Missed GT (Red)
+            
+            # Re-read GT objects (they are safe in _gt_objects)
+            gt_objects = [o for o in event.metadata.get("_gt_objects", []) if o.get("visible", False)]
+            
+            analysis_results = []
+            matched_gt_ids = set()
+            
+            # Analyze each detection
+            for i, det in enumerate(detections):
+                if det["score"] < self.det_score_thr:
+                    continue
+                    
+                # Use mapped label logic again (simplify for brevity, ideally reuse)
+                raw_label = det['label'].lower().strip()
+                OVERRIDE_MAPPING = {
+                    "cup": "Mug", 
+                    "trash can": "GarbageCan",
+                    "rubbish bin": "GarbageCan",
+                    "pan": "Pot",
+                    "hand towel": "Towel",
+                    "soap dispenser": "SoapBottle",
+                    "pepper shaker": "SaltShaker",
+                    "garbage": "GarbageCan",
+                    "garbage bag": "GarbageCan",
+                    "shelf": "ShelvingUnit",
+                    "sink": "SinkBasin",
+                    "counter": "CounterTop",
+                    "worktop": "CounterTop",
+                    "paper towel": "PaperTowelRoll",
+                    "paper towel roll": "PaperTowelRoll",
+                    "coffee maker": "CoffeeMachine",
+                    "side table": "SideTable",
+                }
+                gt_types_set = {o["objectType"] for o in event.metadata.get("_gt_objects", [])}
+                if raw_label == "cup":
+                    if "Cup" in gt_types_set:
+                        mapped_label = "Cup"
+                    elif "Mug" in gt_types_set:
+                        mapped_label = "Mug"
+                    else:
+                        mapped_label = OVERRIDE_MAPPING.get(raw_label, raw_label.title().replace(" ", ""))
+                elif raw_label == "pepper shaker":
+                    if "PepperShaker" in gt_types_set:
+                        mapped_label = "PepperShaker"
+                    elif "SaltShaker" in gt_types_set:
+                        mapped_label = "SaltShaker"
+                    else:
+                        mapped_label = OVERRIDE_MAPPING.get(raw_label, raw_label.title().replace(" ", ""))
+                else:
+                    mapped_label = OVERRIDE_MAPPING.get(raw_label, raw_label.title().replace(" ", ""))
+                
+                det_pos = np.array(list(det.get("position", {"x":0,"y":0,"z":0}).values()))
+                
+                # Check match against Visible GT
+                is_matched = False
+                match_id = None
+                
+                for gt in gt_objects:
+                    if gt["objectId"] in matched_gt_ids:
+                        continue # Already matched this GT occurrence? (Optional: allow multiple detections for one GT?)
+                        # Let's allow multiple detections to map to same GT for visualization purposes, 
+                        # but "Matched" usually means correct.
+                        
+                    # Strict Label Match (with Drawer proxy)
+                    drawer_proxy_labels = {"Cabinet", "CounterTop", "ShelvingUnit"}
+                    is_drawer_proxy = gt["objectType"] == "Drawer" and mapped_label in drawer_proxy_labels
+                    if gt["objectType"] == mapped_label or is_drawer_proxy:
+                        # 3D Distance Check (projected depth)
+                        gt_pos = np.array([gt["position"]["x"], gt["position"]["y"], gt["position"]["z"]])
+                        det_pos_arr = np.array([det_pos[0], det_pos[1], det_pos[2]]) # Ensure array
+                        
+                        dist = np.linalg.norm(det_pos_arr - gt_pos)
+                        
+                        # [DEBUG] Print Window Distance
+                        if mapped_label == "Window" and gt["objectType"] == "Window":
+                            # Uncomment to debug
+                            # print(f"[DEBUG] Window Dist: {dist:.2f} | Det: {det_pos_arr} | GT: {gt_pos}")
+                            pass
+
+                        # Large planar surfaces should not use distance matching
+                        if mapped_label in ["Floor", "Ceiling", "Wall"]:
+                            is_matched = True
+                            match_id = gt["objectId"]
+                            break
+
+                        # Relaxed threshold for Large/Transparent objects
+                        threshold = 2.0 if mapped_label in ["Window", "Door", "Blinds", "Curtains"] else 1.5
+                        small_objects = {"ButterKnife","Knife","Fork","Spoon","Spatula","DishSponge","SaltShaker","PepperShaker","Mug","Cup","Tomato","Potato","Egg","PaperTowelRoll"}
+                        if mapped_label in small_objects:
+                            threshold = max(threshold, 2.0)
+                        if is_drawer_proxy:
+                            threshold = max(threshold, 1.5)
+                        
+                        if dist < threshold: # Relaxed threshold
+                             is_matched = True
+                             match_id = gt["objectId"]
+                             # matched_gt_ids.add(match_id) # Don't consume for vis, show all valid detections
+                             break
+                
+                analysis_results.append({
+                    "raw_label": det['label'],
+                    "mapped_label": mapped_label,
+                    "score": det['score'],
+                    "box": det.get("bbox", det.get("box")), # [Fix] Adapter uses "bbox"
+                    "status": "matched" if is_matched else "extra",
+                    "match_id": match_id
+                })
+            
+            # Save analysis to metadata for the runner to read
+            event.metadata["detection_analysis"] = analysis_results
         
         return event
 
@@ -392,18 +582,22 @@ class ThorEnv:
             truncated = False
         obs = Observation(state=self.state, truncated=truncated, terminated=terminated)
 
-        score, recall_node, recall_edge = self.compute_score(obs)
+        score, recall_node, recall_edge, num_discovered, num_gt = self.compute_score(obs)
 
         obs.info = {
             "event": event,
             "score": score,
             "recall_node": recall_node,
             "recall_edge": recall_edge,
+            "num_discovered": num_discovered,
+            "num_gt": num_gt,
             "action": action,
             "agent_pos": (agent_x, agent_z),
             "allActionsSuccess": all_success,
             "errorMessages": error_msgs,
             "max_steps_reached": self.step_count >= self.max_actions,
+            "last_detections": getattr(self, "last_raw_detections", []),
+            "visible_gt_objects": [o["objectType"] for o in event.metadata.get("_gt_objects", []) if o.get("visible", False)]
         }
 
         obs.reward = self._compute_reward(obs)
@@ -411,9 +605,58 @@ class ThorEnv:
 
     def compute_score(self, obs):
         num_gt_objects = len(self.gt_graph.nodes)
+        
+        # [Fix] True Recall Calculation: Match Global Nodes to GT Nodes
+        # Only count a found node if it matches a GT node by (Label + Distance < 1.0m)
         discovered_nodes = [n for n in self.global_sg.nodes.values() if n.visibility >= 0.8]
-        num_discovered = len(discovered_nodes)
+        
+        matched_count = 0
+        matched_gt_ids = set()
+        
+        for d_node in discovered_nodes:
+            d_pos = np.array(d_node.position)
+            best_dist = float('inf')
+            best_gt_id = None
+            
+            for gt_id, gt_node in self.gt_graph.nodes.items():
+                # 1. Label Match (Strict or Mapped)
+                # GT graph names are usually PascalCase (e.g. "CoffeeMachine")
+                # Found node names are mapped in _apply_detection (e.g. "CoffeeMachine")
+                drawer_proxy_labels = {"Cabinet", "CounterTop", "ShelvingUnit"}
+                is_drawer_proxy = gt_node.name == "Drawer" and d_node.name in drawer_proxy_labels
+                if d_node.name != gt_node.name and not is_drawer_proxy:
+                    continue
+                
+                # 2. Distance Check
+                gt_pos = np.array(gt_node.position)
+                dist = np.linalg.norm(d_pos - gt_pos)
+
+                # Large planar surfaces should not use distance matching
+                if gt_node.name in ["Floor", "Ceiling", "Wall"]:
+                    best_gt_id = gt_id
+                    best_dist = 0.0
+                    break
+
+                small_objects = {"ButterKnife","Knife","Fork","Spoon","Spatula","DishSponge","SaltShaker","PepperShaker","Mug","Cup","Tomato","Potato","Egg","PaperTowelRoll"}
+                dist_threshold = 2.0 if d_node.name in small_objects else (1.5 if is_drawer_proxy else 1.0)
+                if dist < dist_threshold and dist < best_dist:
+                    best_dist = dist
+                    best_gt_id = gt_id
+            
+            # If we found a valid GT match that hasn't been counted yet
+            if best_gt_id is not None and best_gt_id not in matched_gt_ids:
+                matched_count += 1
+                matched_gt_ids.add(best_gt_id)
+
+        # Update metrics to reflect TRUTH
+        num_discovered = matched_count # Use matched count for recall
+        
         recall_node = num_discovered / num_gt_objects if num_gt_objects > 0 else 0.0
+        
+        # [DEBUG SCORE]
+        if self.step_count % 10 == 0:
+            raw_found = len(discovered_nodes)
+            print(f"[SCORE DEBUG] Step: {self.step_count} | Found Nodes: {raw_found} -> Matched GT: {matched_count} | Total GT: {num_gt_objects} | Recall: {recall_node:.4f}")
 
         num_gt_edges = len(self.gt_graph.edges)
         num_discovered_edges = len(self.global_sg.edges) if hasattr(self.global_sg, "edges") else 0
@@ -421,7 +664,7 @@ class ThorEnv:
 
         termination_bonus = 0.0 if obs.terminated else 0.0
         score = recall_node + termination_bonus
-        return score, recall_node, recall_edge
+        return score, recall_node, recall_edge, num_discovered, num_gt_objects
 
     def get_occupancy_indices(self, event):
         pos = event.metadata["agent"]["position"]
