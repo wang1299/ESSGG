@@ -247,3 +247,5 @@ cython_debug/
 *.pkl
 __pycache__/
 data/
+train_png/
+*.jpg
