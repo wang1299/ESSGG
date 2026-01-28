@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # === 配置 ===
-HSSD_ROOT = "/home/chengpeng/ESSGG/habitat_data" # 你的路径
+HSSD_ROOT = "/home/wgy/RL/habitat_data" # 你的路径
 DATASET_CONFIG = os.path.join(HSSD_ROOT, "hssd-hab.scene_dataset_config.json")
 OUTPUT_DIR = "hssd_all_maps"
 # ===========

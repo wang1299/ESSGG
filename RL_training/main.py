@@ -5,8 +5,8 @@ from argparse import ArgumentParser
 from pathlib import Path
 import torch
 # === [关键修改] 先把项目根目录加进去，再 import ===
-sys.path.append("/home/wgy/ESSGG") 
-sys.path.append("/home/wgy/ESSGG/GroundingDINO")
+sys.path.append("/home/wgy/RL") 
+sys.path.append("/home/wgy/RL/GroundingDINO")
 # === [新增 import] ===
 from components.detectors.grounding_dino_adapter import GroundingDINODetector
 
@@ -27,8 +27,8 @@ def main(config):
     if args.use_dino: # 假设你在 argparse 里加了这个参数，或者直接强制开启
         print("[INFO] Initializing Grounding DINO Detector...")
         # ！！！请修改下面的路径为你的真实路径！！！
-        dino_config = "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-        dino_weights = "weights/groundingdino_swint_ogc.pth" # 你的 .pth 文件路径
+        dino_config = "/home/wgy/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+        dino_weights = "/home/wgy/GroundingDINO/weights/groundingdino_swint_ogc.pth" # 你的 .pth 文件路径
         
         if not os.path.exists(dino_weights):
             print(f"[WARNING] DINO weights not found at {dino_weights}. Running without detector.")
@@ -37,6 +37,12 @@ def main(config):
                 config_path=dino_config,
                 checkpoint_path=dino_weights,
                 # Updated text prompt using exactly the 64 categories from object_types.json
+                # Removed 'House Plant', 'Sink Basin', 'Stove Burner', 'Stove Knob' spaces to match JSON keys better or rely on mapping
+                # But actually DINO needs natural language.
+                # Let's clean up the prompt to be natural language but covering all 64 categories.
+                # Note: "SinkBasin" in json -> "Sink Basin" in prompt is good.
+                # JSON: Cabinet, CounterTop, Faucet, Floor, HousePlant, Microwave, Pot, Potato, SinkBasin, SoapBottle, StoveBurner, StoveKnob, Window, Apple, Chair, DiningTable, Plate, Bowl, Knife, Pan, Tomato, Drawer, GarbageCan, Fridge, Bread, Lettuce, Sink, Spatula, Toaster, Cup, PepperShaker, SaltShaker, ButterKnife, Spoon, CoffeeMachine, LightSwitch, Mug, DishSponge, Fork, Ladle, WineBottle, CellPhone, Kettle, Egg, PaperTowelRoll, Book, CreditCard, Stool, Blinds, AluminumFoil, Mirror, Shelf, SideTable, ShelvingUnit, Statue, Vase, Bottle, GarbageBag, Pencil, Curtains, SprayBottle, Pen, Safe, Wall
+                
                 text_prompt="Cabinet . Counter Top . Faucet . Floor . House Plant . Microwave . Pot . Potato . Sink Basin . Soap Bottle . Stove Burner . Stove Knob . Window . Apple . Chair . Dining Table . Plate . Bowl . Knife . Pan . Tomato . Drawer . Garbage Can . Fridge . Bread . Lettuce . Sink . Spatula . Toaster . Cup . Pepper Shaker . Salt Shaker . Butter Knife . Spoon . Coffee Machine . Light Switch . Mug . Dish Sponge . Fork . Ladle . Wine Bottle . Cell Phone . Kettle . Egg . Paper Towel Roll . Book . Credit Card . Stool . Blinds . Aluminum Foil . Mirror . Shelf . Side Table . Shelving Unit . Statue . Vase . Bottle . Garbage Bag . Pencil . Curtains . Spray Bottle . Pen . Safe . Wall .",
                 box_threshold=0.20,
                 text_threshold=0.20
@@ -60,6 +66,7 @@ def main(config):
             max_actions=agent_config["num_steps"],
             detector=dino_detector, # <--- [关键] 传入检测器
             det_score_thr=0.20 if dino_detector is not None else 0.30,
+            save_debug_path=args.save_frames_to # [New] Pass viz path
         )
 
     # Load agent from encoder & policy weights

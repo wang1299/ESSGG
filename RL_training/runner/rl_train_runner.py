@@ -10,10 +10,14 @@ from tqdm import tqdm
 
 
 class RLTrainRunner:
-    def __init__(self, env, agent, device=None):
+    def __init__(self, env, agent, device=None, save_dir=None):
         self.env = env
         self.agent = agent
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.save_dir = save_dir 
+        if save_dir:
+            print(f"[INFO] Training frames will be saved to: {save_dir}")
+        
         self.agent.to(self.device)
         self.agent_config = agent.agent_config
         self.navigation_config = agent.navigation_config
@@ -89,6 +93,10 @@ class RLTrainRunner:
             episode_stds = []
 
             for scene_number in self.scene_numbers:
+                # [Visualization Update] Pass episode count to env if supported
+                if hasattr(self.env, "episode_id"):
+                    self.env.episode_id = episode_count
+                
                 obs = self.robust_reset(scene_number)
                 if obs is None:
                     continue

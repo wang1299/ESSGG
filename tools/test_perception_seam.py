@@ -3,7 +3,7 @@ import os
 from PIL import Image
 
 # 确保能找到项目根目录
-sys.path.append("/home/wgy/ESSGG")
+sys.path.append("/home/wgy/RL")
 
 from components.environments.thor_env import ThorEnv
 from components.detectors.grounding_dino_adapter import GroundingDINODetector
@@ -47,7 +47,7 @@ def main():
     try:
         debug_img = Image.fromarray(obs.info["event"].frame)
         debug_img.save("debug_view.jpg")
-        print("📸 已保存当前视角图像到 ESSGG/debug_view.jpg，请检查机器人视野。")
+        print("📸 已保存当前视角图像到 RL/debug_view.jpg，请检查机器人视野。")
     except Exception as e:
         print(f"保存调试图片失败: {e}")
 

@@ -4,6 +4,8 @@ import pickle
 import numpy as np
 import cv2
 import torch
+import json
+import re
 from PIL import Image
 
 # Add potential paths to sys.path
@@ -15,6 +17,35 @@ except ImportError as e:
     print(f"Error importing components: {e}")
     print("Please run this script from the project root (e.g. /home/wgy/RL)")
     sys.exit(1)
+
+def load_objects_prompt(json_path):
+    if not os.path.exists(json_path):
+        print(f"Warning: Object types file not found at {json_path}")
+        return None
+    
+    with open(json_path, 'r') as f:
+        data = json.load(f)
+    
+    # Keys are like "CounterTop", "microwave" etc.
+    # Convert CamelCase to Spaced: CounterTop -> Counter Top
+    objects = list(data.keys())
+    
+    processed_objects = []
+    for obj in objects:
+        # Split CamelCase: 'CounterTop' -> 'Counter Top'
+        # Also handles 'TV' -> 'TV', 'SinkBasin' -> 'Sink Basin'
+        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1 \2', obj)
+        s2 = re.sub('([a-z0-9])([A-Z])', r'\1 \2', s1)
+        processed_objects.append(s2)
+    
+    # Join with " . " as required by GroundingDINO
+    prompt = " . ".join(processed_objects) + " ."
+    print(f"Generated prompt with {len(objects)} categories.")
+    # Check length roughly
+    if len(prompt.split()) > 200:
+        print(f"Warning: Prompt length ({len(prompt.split())} words) is quite long. DINO might truncate.")
+        
+    return prompt
 
 def load_pickle_data(pkl_path):
     if not os.path.exists(pkl_path):
@@ -108,10 +139,6 @@ def draw_detections(image, detections, output_path, gt_objects=None):
         visible_gt_count = 0
         for obj in gt_objects:
             if isinstance(obj, dict) and obj.get('visible', False):
-                # We usually don't have 2D bbox for GT in bare event data unless metadata['objects'] has it
-                # AI2-THOR object metadata usually has 'axisAlignedBoundingBox' (3D)
-                # But sometimes it has 'objectId' and 'objectType'.
-                # Without 2D bbox projecting, we can just list them.
                 print(f"GT Object (Visible): {obj.get('objectType')} (ID: {obj.get('objectId')})")
                 visible_gt_count += 1
         
@@ -124,22 +151,27 @@ def draw_detections(image, detections, output_path, gt_objects=None):
 def main():
     # --- Configuration ---
     # 1. Select a sample file from the dataset
-    # You can change this path to test different scenes
-    # pkl_file = "components/data/il_dataset/FloorPlan1/FloorPlan1_px_-0.75_pz_-1.5_ry_270.0.pkl"
-    # pkl_path = os.path.join(os.getcwd(), pkl_file)
-    pkl_path = "/home/wgy/RL/components/data/il_dataset/FloorPlan1/FloorPlan1_px_-0.75_pz_-1.5_ry_270.0.pkl"
+    pkl_file = "components/data/il_dataset/FloorPlan1/FloorPlan1_px_-0.75_pz_-1.5_ry_270.0.pkl"
+    # Use absolute path just in case
+    pkl_path = os.path.join("/home/wgy/RL", pkl_file)
     
     # 2. DINO Config (Assuming default paths from your project structure)
-    grounding_dino_root = "../GroundingDINO" # Relative to RL folder if they are siblings
-    # Or absolute:
     grounding_dino_root = "/home/wgy/GroundingDINO"
     
     config_path = os.path.join(grounding_dino_root, "groundingdino/config/GroundingDINO_SwinT_OGC.py")
     checkpoint_path = os.path.join(grounding_dino_root, "weights/groundingdino_swint_ogc.pth")
     
     # 3. Prompts
-    # What do we want to detect?
-    prompt = "chair . table . sofa . bed . plant . tv . refrigerator . microwave . sink . toilet"
+    # Load from object_types.json
+    object_types_path = "/home/wgy/RL/components/data/scene_graph_mappings/default/object_types.json"
+    full_prompt = load_objects_prompt(object_types_path)
+    
+    if full_prompt:
+        prompt = full_prompt
+    else:
+        # Fallback if file not found
+        print("Using fallback prompt.")
+        prompt = "chair . table . sofa . bed . plant . tv . refrigerator . microwave . sink . toilet"
     
     # --- Execution ---
     print(f"Loading data from: {pkl_path}")
@@ -166,8 +198,8 @@ def main():
             config_path=config_path,
             checkpoint_path=checkpoint_path,
             text_prompt=prompt,
-            box_threshold=0.35,
-            text_threshold=0.25
+            box_threshold=0.20, # Following user's code in main.py
+            text_threshold=0.20
         )
     except Exception as e:
         print(f"Failed to load detector: {e}")
@@ -175,13 +207,10 @@ def main():
 
     # Run Detection
     print("Running detection...")
-    # depth and agent_state are optional for 2D visualization
     try:
         detections = detector.detect(rgb_image=image)
     except Exception as e:
         print("Detection failed.")
-        # Sometimes header changes, let's look at the adapter signature
-        # detect(self, rgb_image, depth_image=None, agent_state=None)
         print(e)
         return
 

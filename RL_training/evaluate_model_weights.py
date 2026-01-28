@@ -4,8 +4,8 @@ from argparse import ArgumentParser
 from pathlib import Path
 import torch
 
-sys.path.append("/home/wgy/ESSGG")
-sys.path.append("/home/wgy/ESSGG/GroundingDINO")
+sys.path.append("/home/wgy/RL")
+sys.path.append("/home/wgy/RL/GroundingDINO")
 
 # === [新增] 确保能找到 GroundingDINO ===
 # 如果你已经 pip install -e . 了，这行其实不需要，但加上为了保险
