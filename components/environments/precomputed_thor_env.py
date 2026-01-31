@@ -271,7 +271,8 @@ class PrecomputedThorEnv:
             local_sg = self.builder.build_from_metadata(temp_metadata)
             
             # --- [Enhanced Visualization Logic] ---
-            if self.save_debug_path and self.current_ep_dir:
+            # Save every 5 steps to reduce I/O overhead
+            if self.save_debug_path and self.current_ep_dir and self.step_count % 5 == 0:
                 try:
                     from collections import Counter
                     
@@ -562,13 +563,36 @@ class PrecomputedThorEnv:
     
     # 请确保保留 compute_score, get_occupancy_indices, _update_occupancy, _compute_reward 等所有剩余方法
     def compute_score(self, obs):
-        num_gt_objects = len(self.gt_graph.nodes)
+        from collections import Counter
+        
+        # GT Objects
+        gt_types = [n.name for n in self.gt_graph.nodes.values()]
+        gt_counts = Counter(gt_types)
+        num_gt_objects = len(gt_types) # Should match sum(gt_counts)
+        
+        # Discovered Objects
+        # Warning: GlobalSG might contain ghosts (detections not present in GT) if we used DINO
         discovered_nodes = [n for n in self.global_sg.nodes.values() if n.visibility >= 0.8]
-        num_discovered = len(discovered_nodes)
-        recall_node = num_discovered / num_gt_objects if num_gt_objects > 0 else 0.0
+        discovered_counts = Counter([n.name for n in discovered_nodes])
+        
+        # Calculate Recall based on MIN(detected, gt) per category
+        # This prevents scoring > 100% per category and penalizes ghosts (by not counting them towards other categories)
+        matched_count = 0
+        for obj_type, gt_count in gt_counts.items():
+            # How many of this type did we find? Cap at GT amount.
+            found_count = discovered_counts.get(obj_type, 0)
+            matched_count += min(found_count, gt_count)
+        
+        recall_node = matched_count / num_gt_objects if num_gt_objects > 0 else 0.0
+        
+        # Edge Recall (simplified for now, usually edges depend on nodes)
         num_gt_edges = len(self.gt_graph.edges)
         num_discovered_edges = len(self.global_sg.edges) if hasattr(self.global_sg, "edges") else 0
-        recall_edge = num_discovered_edges / num_gt_edges if num_gt_edges > 0 else 0.0
+        # For edges, it's harder to do strict matching without ID correspondence, 
+        # but usually node matching is the dominant factor for Score > 1.
+        # Let's just clip edge recall for safety too.
+        recall_edge = min(1.0, num_discovered_edges / num_gt_edges) if num_gt_edges > 0 else 0.0
+        
         termination_bonus = 0.0 if obs.terminated else 0.0
         score = recall_node + termination_bonus
         return score, recall_node, recall_edge

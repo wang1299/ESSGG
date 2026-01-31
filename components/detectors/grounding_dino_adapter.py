@@ -34,6 +34,7 @@ class GroundingDINODetector:
         self.cx = self.img_width / 2.0
         self.cy = self.img_height / 2.0
 
+    @torch.no_grad()
     def detect(self, rgb_image, depth_image=None, agent_state=None):
         """
         Args:
@@ -58,6 +59,10 @@ class GroundingDINODetector:
             box_threshold=self.box_threshold,
             text_threshold=self.text_threshold
         )
+        
+        # OOM Fix: Clean up
+        image_tensor = image_tensor.cpu()
+        # torch.cuda.empty_cache() # Removed for speed
 
         # === [DEBUG] 打印检测结果 ===
         if len(phrases) > 0:
