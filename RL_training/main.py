@@ -1,6 +1,7 @@
 import datetime
 import os
 import sys
+import signal # Added for signal handling
 from argparse import ArgumentParser
 from pathlib import Path
 import torch
@@ -82,18 +83,31 @@ def main(config):
     # RL training runner
     # [Mod] Pass save_frames_to
     runner = RLTrainRunner(env=env, agent=agent, device=device, save_dir=args.save_frames_to)
-    runner.run()
-    env.close()
-    print("[INFO] Training completed.")
+    
+    try:
+        runner.run()
+        print("[INFO] Training completed.")
+    except KeyboardInterrupt:
+        print("\n[INFO] Training interrupted by user.")
+    except Exception as e:
+        print(f"\n[ERROR] Training interrupted by error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        env.close()
 
-    # --- Save final model ---
-    if args.save_model:
-        save_folder = Path("RL_training") / "runs" / "model_weights"
-        save_folder.mkdir(exist_ok=True)
-        run_start = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        # Python 3.7+ f-string fix
-        file_name = f"{run_start}_{agent_config['name']}_agent.pth"
-        agent.save_model(str(save_folder), file_name=file_name)
+        # --- Save final model ---
+        if args.save_model:
+            print("[INFO] Saving model checkpoint (finished or interrupted)...")
+            save_folder = Path("RL_training") / "runs" / "model_weights"
+            save_folder.mkdir(exist_ok=True, parents=True)
+            run_start = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            # Python 3.7+ f-string fix
+            file_name = f"{run_start}_{agent_config['name']}_agent.pth"
+            try:
+                agent.save_model(str(save_folder), file_name=file_name)
+            except Exception as save_err:
+                print(f"[ERROR] Failed to save model: {save_err}")
 
 
 def set_working_directory():
@@ -110,6 +124,15 @@ def set_working_directory():
 
 
 if __name__ == "__main__":
+    # --- Register signal handler ---
+    def handle_sigterm(signum, frame):
+        print(f"\n[INFO] Received SIGTERM (signal {signum}). Initiating graceful shutdown...")
+        # Raising KeyboardInterrupt is handled by the existing try-except block in main()
+        # and will trigger the finally block to save the model.
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, handle_sigterm)
+    
     set_working_directory()
 
     from components.agents.a2c_agent import A2CAgent
