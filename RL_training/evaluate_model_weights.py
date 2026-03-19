@@ -102,12 +102,11 @@ def main(config, args):
         
         # 运行评估
         runner = RLEvalRunner(
-            env=env, 
-            agent=agent, 
+            env=env,
+            agent=agent,
             device=device,
-            save_dir=args.save_frames_to,  # [Modified] Pass save directory
-            total_episodes=args.num_episodes # [Modified]
         )
+        runner.total_episodes = args.num_episodes
         runner.run()
         
     env.close()
