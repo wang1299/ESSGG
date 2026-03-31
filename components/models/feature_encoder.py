@@ -259,10 +259,14 @@ class FeatureEncoder(nn.Module):
         # --- 1. Process Standard Features (RGB, Occupancy, Action) ---
         rgb_flat = [im for seq in batch_dict["rgb"] for im in seq]
 
-        rgb_tensor = self.preprocess_rgb(rgb_flat).to(device)
+        rgb_tensor = self.preprocess_rgb(rgb_flat)
         act_flat = last_actions.view(-1).to(device)
 
-        rgb_feat = self.rgb_encoder(rgb_tensor)
+        if isinstance(self.rgb_encoder, nn.DataParallel):
+            # Keep tensor on CPU so DataParallel scatters to multiple GPUs directly.
+            rgb_feat = self.rgb_encoder(rgb_tensor)
+        else:
+            rgb_feat = self.rgb_encoder(rgb_tensor.to(device))
         act_feat = self.action_emb(act_flat)
 
         # --- 2. Process Graph Features with GAT ---
@@ -335,7 +339,8 @@ class FeatureEncoder(nn.Module):
         os.makedirs(path, exist_ok=True)
         # Gather relevant config parameters for filename
         num_actions = self.num_actions
-        rgb_dim = self.rgb_encoder.output_dim
+        rgb_encoder = self.rgb_encoder.module if isinstance(self.rgb_encoder, nn.DataParallel) else self.rgb_encoder
+        rgb_dim = rgb_encoder.output_dim
         action_dim = self.action_emb.embedding.embedding_dim
         sg_dim = self.lssg_encoder.lstm.hidden_size if not self.use_transformer else self.lssg_encoder.output_dim
 
@@ -379,7 +384,20 @@ class FeatureEncoder(nn.Module):
         Loads model weights into an existing FeatureEncoder instance.
         """
         state_dict = torch.load(model_path, map_location=device, weights_only=False)
-        self.load_state_dict(state_dict)
+        
+        # Filter out size mismatches
+        model_state_dict = self.state_dict()
+        filtered_state_dict = {}
+        for k, v in state_dict.items():
+            if k in model_state_dict:
+                if v.shape != model_state_dict[k].shape:
+                    print(f"[WARNING] Skipping layer {k} due to shape mismatch: checkpoint {v.shape} vs model {model_state_dict[k].shape}")
+                    continue
+                filtered_state_dict[k] = v
+            else:
+                filtered_state_dict[k] = v # Let strict=False handle unexpected keys
+        
+        self.load_state_dict(filtered_state_dict, strict=False)
         self.to(device)
 
 

@@ -84,6 +84,7 @@ class RLTrainRunner:
 
         while episode_count < self.total_episodes:
             episode_scores = []
+            episode_coverages = []
             episode_steps = []
             episode_rewards = []
             episode_losses = []
@@ -134,7 +135,9 @@ class RLTrainRunner:
                 std = result.get("ret_std", None)
 
                 final_score = obs.info.get("score", 0.0)
+                final_coverage = obs.info.get("coverage", np.nan)
                 episode_scores.append(final_score)
+                episode_coverages.append(final_coverage)
                 episode_steps.append(episode_steps_scene)
                 episode_rewards.append(episode_reward)
                 episode_losses.append(loss)
@@ -147,6 +150,8 @@ class RLTrainRunner:
                     episode_stds.append(std)
 
             mean_score = np.mean(episode_scores)
+            finite_coverages = [x for x in episode_coverages if np.isfinite(x)]
+            mean_coverage = np.mean(finite_coverages) if finite_coverages else np.nan
             mean_steps = np.mean(episode_steps)
             mean_reward = np.mean(episode_rewards)
             mean_loss = np.mean(episode_losses)
@@ -164,26 +169,35 @@ class RLTrainRunner:
             # --- Logging ---
             self.writer.add_scalar("policy/entropy", mean_entropy, episode_count)
             self.writer.add_scalar("last_episode/Mean_Score", mean_score, episode_count)
+            if np.isfinite(mean_coverage):
+                self.writer.add_scalar("last_episode/Mean_Coverage", mean_coverage, episode_count)
             self.writer.add_scalar("last_episode/Mean_Steps", mean_steps, episode_count)
             self.writer.add_scalar("last_episode/Mean_Reward", mean_reward, episode_count)
             self.writer.add_scalar("Loss", mean_loss, episode_count)
             if hasattr(self.env, "rho"):
                 self.writer.add_scalar("env/rho", self.env.rho, episode_count)
 
-            pbar.set_postfix(
-                {"Loss": f"{mean_loss:.3f}", "Mean Score (last ep)": f"{mean_score:.2f}", "Mean Steps (last ep)": f"{mean_steps:4.1f}"}
-            )
+            postfix = {
+                "Loss": f"{mean_loss:.3f}",
+                "Mean Score (last ep)": f"{mean_score:.2f}",
+                "Mean Steps (last ep)": f"{mean_steps:4.1f}",
+            }
+            if np.isfinite(mean_coverage):
+                postfix["Coverage (last ep)"] = f"{mean_coverage:.3f}"
+            pbar.set_postfix(postfix)
 
-            self.ep_info_buffer.append({"reward": mean_reward, "steps": mean_steps, "score": mean_score})
+            self.ep_info_buffer.append({"reward": mean_reward, "steps": mean_steps, "score": mean_score, "coverage": mean_coverage})
 
             # Moving averages
             recent_scores = [ep["score"] for ep in list(self.ep_info_buffer)]
             recent_steps = [ep["steps"] for ep in list(self.ep_info_buffer)]
             recent_rewards = [ep["reward"] for ep in list(self.ep_info_buffer)]
+            recent_coverages = [ep["coverage"] for ep in list(self.ep_info_buffer) if np.isfinite(ep.get("coverage", np.nan))]
 
             mean_score_total = np.mean(recent_scores) if recent_scores else 0
             mean_steps_total = np.mean(recent_steps) if recent_steps else 0
             mean_reward_total = np.mean(recent_rewards) if recent_rewards else 0
+            mean_coverage_total = np.mean(recent_coverages) if recent_coverages else np.nan
 
             if mean_score_total > max_score:
                 max_score = mean_score_total
@@ -191,6 +205,8 @@ class RLTrainRunner:
             self.writer.add_scalar("Rollout/Mean_Reward", mean_reward_total, episode_count)
             self.writer.add_scalar("Rollout/Mean_Steps", mean_steps_total, episode_count)
             self.writer.add_scalar("Rollout/Mean_Score", mean_score_total, episode_count)
+            if np.isfinite(mean_coverage_total):
+                self.writer.add_scalar("Rollout/Mean_Coverage", mean_coverage_total, episode_count)
             if mean_score_total > 0:
                 self.writer.add_scalar("Rollout/Steps_for_score_1", mean_steps_total / mean_score_total, episode_count)
 
@@ -201,6 +217,8 @@ class RLTrainRunner:
                     f"MA Score: {mean_score_total:5.2f} | Max Score: {max_score:5.2f} | "
                     f"MA Steps: {mean_steps_total:5.1f} | MA Reward: {mean_reward_total:6.2f}"
                 )
+                if np.isfinite(mean_coverage_total):
+                    print(f"[Coverage] MA Coverage: {mean_coverage_total:6.3f}")
 
             episode_count += 1
             pbar.update(1)

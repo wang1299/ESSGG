@@ -172,7 +172,8 @@ class AbstractAgent(nn.Module):
         base_path.mkdir(parents=True, exist_ok=True)
 
         # Gather relevant config parameters for filename
-        rgb_dim = self.encoder.rgb_encoder.output_dim
+        rgb_encoder = self.encoder.rgb_encoder.module if isinstance(self.encoder.rgb_encoder, nn.DataParallel) else self.encoder.rgb_encoder
+        rgb_dim = rgb_encoder.output_dim
         action_dim = self.encoder.action_emb.embedding.embedding_dim
         sg_dim = self.encoder.lssg_encoder.lstm.hidden_size if not self.use_transformer else self.encoder.lssg_encoder.output_dim
         policy_hidden = self.policy_hidden

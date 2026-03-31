@@ -6,13 +6,17 @@ import groundingdino.datasets.transforms as T
 from groundingdino.util.inference import load_model, predict
 
 class GroundingDINODetector:
-    def __init__(self, config_path, checkpoint_path, text_prompt, box_threshold=0.35, text_threshold=0.25):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+    def __init__(self, config_path, checkpoint_path, text_prompt, box_threshold=0.35, text_threshold=0.25, device=None):
+        if device is not None:
+            self.device = device
+        else:
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"[Perception] Loading Grounding DINO on {self.device}...")
         
         # 加载模型
         try:
             self.model = load_model(config_path, checkpoint_path)
+            self.model = self.model.to(self.device)
         except Exception as e:
             print(f"[Error] Failed to load Grounding DINO model: {e}")
             raise e
