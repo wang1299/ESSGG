@@ -29,12 +29,13 @@ echo "Visualization images: $VIZ_DIR"
 # 运行命令
 # 使用 nohup 后台运行
 # 注意：--save_frames_to 指向本次训练的专属目录
-# [Update] Changed to use Habitat for training
+# [Update] Single-layer HM3D scenes only
+HABITAT_SCENES="00813,00824,00827,00829,00848,00853,00871,00876,00880"
 nohup python RL_training/main.py \
     --conf_path run_config \
     --save_model \
     --use_habitat \
-    --habitat_scene /home/wgy/hm3d/scene_datasets/hm3d/val/00800-TEEsavR23oF/TEEsavR23oF.basis.glb \
+    --habitat_scenes "$HABITAT_SCENES" \
     --use_dino \
     --save_frames_to "$VIZ_DIR" \
     > "$LOG_FILE" 2>&1 &

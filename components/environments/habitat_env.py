@@ -3,10 +3,36 @@ import numpy as np
 import os
 import random
 import csv
+import sys
+import contextlib
 from collections import deque
 from components.utils.observation import Observation
 from habitat_sim.utils.common import quat_from_angle_axis
 import magnum as mn
+
+
+@contextlib.contextmanager
+def _suppress_native_output():
+    stdout_fd = os.dup(1)
+    stderr_fd = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os.dup2(stdout_fd, 1)
+        os.dup2(stderr_fd, 2)
+        os.close(stdout_fd)
+        os.close(stderr_fd)
+        os.close(devnull)
 
 class HabitatEnv:
     def __init__(
@@ -14,6 +40,7 @@ class HabitatEnv:
         dataset_root,
         config_file,
         scene_id,
+        scene_ids=None,
         render=False,
         width=300,
         height=300,
@@ -35,6 +62,12 @@ class HabitatEnv:
         self.step_count = 0
         self.save_debug_path = save_debug_path
         self.episode_id = 0
+        self.render = render
+        self.config_file = config_file
+        self.base_scene_id = scene_id
+        self.scene_ids = self._normalize_scene_ids(scene_id, scene_ids)
+        self.scene_id = self.scene_ids[0]
+        self.current_scene_index = 0
         
         if self.save_debug_path and not os.path.exists(self.save_debug_path):
             os.makedirs(self.save_debug_path, exist_ok=True)
@@ -62,74 +95,93 @@ class HabitatEnv:
         else:
             print(f"Warning: Dataset root {dataset_root} not found. Continuing in {os.getcwd()}")
 
-        sim_cfg = habitat_sim.SimulatorConfiguration()
-        sim_cfg.scene_dataset_config_file = config_file
-        sim_cfg.scene_id = scene_id
-        sim_cfg.enable_physics = False
-        sim_cfg.force_separate_semantic_scene_graph = True
-        
-        # Create agent config
-        agent_cfg = habitat_sim.agent.AgentConfiguration()
-        
-        # Add sensors
-        rgb_sensor_spec = habitat_sim.CameraSensorSpec()
-        rgb_sensor_spec.uuid = "color_sensor"
-        rgb_sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
-        rgb_sensor_spec.resolution = [height, width]
-        
-        depth_sensor_spec = habitat_sim.CameraSensorSpec()
-        depth_sensor_spec.uuid = "depth_sensor"
-        depth_sensor_spec.sensor_type = habitat_sim.SensorType.DEPTH
-        depth_sensor_spec.resolution = [height, width]
-        
-        agent_cfg.sensor_specifications = [rgb_sensor_spec, depth_sensor_spec]
-        
-        # Action Space
-        agent_cfg.action_space = {
-            "move_forward": habitat_sim.agent.ActionSpec(
-                "move_forward", habitat_sim.agent.ActuationSpec(amount=0.25)
-            ),
-            "move_backward": habitat_sim.agent.ActionSpec(
-                "move_backward", habitat_sim.agent.ActuationSpec(amount=0.25)
-            ),
-            "move_left": habitat_sim.agent.ActionSpec(
-                "move_left", habitat_sim.agent.ActuationSpec(amount=0.25)
-            ),
-            "move_right": habitat_sim.agent.ActionSpec(
-                "move_right", habitat_sim.agent.ActuationSpec(amount=0.25)
-            ),
-            "turn_left": habitat_sim.agent.ActionSpec(
-                "turn_left", habitat_sim.agent.ActuationSpec(amount=30.0) 
-            ),
-            "turn_right": habitat_sim.agent.ActionSpec(
-                "turn_right", habitat_sim.agent.ActuationSpec(amount=30.0)
-            ),
-        }
-        
-        cfg = habitat_sim.Configuration(sim_cfg, [agent_cfg])
-        try:
-            self.sim = habitat_sim.Simulator(cfg)
-        except Exception as e:
-            print(f"Error initializing Habitat Simulator: {e}")
-            # Restore CWD before raising
-            os.chdir(self.initial_cwd)
-            raise e
+        self._load_scene(self.scene_id)
         
         # Restore CWD
         os.chdir(self.initial_cwd)
 
-        # Actions mapping matching ThorEnv
-        # ["RotateRight", "RotateLeft", "Pass", "MoveAhead", "MoveRight", "MoveLeft", "MoveBack", "Pass"]
+        # Custom simplified actions
         self.action_mapping = [
-            "turn_right",     # 0: RotateRight
-            "turn_left",      # 1: RotateLeft
-            None,             # 2: Pass
-            "move_forward",   # 3: MoveAhead
-            "move_right",     # 4: MoveRight
-            "move_left",      # 5: MoveLeft
-            "move_backward",  # 6: MoveBack
-            None              # 7: Pass
+            "turn_left",      # 0
+            "turn_right",     # 1
+            "move_forward",   # 2
         ]
+
+    def _normalize_scene_ids(self, scene_id, scene_ids):
+        if scene_ids:
+            normalized = [str(scene).strip() for scene in scene_ids if str(scene).strip()]
+            return normalized if normalized else [scene_id]
+        return [scene_id]
+
+    def _create_simulator_config(self, scene_id):
+        sim_cfg = habitat_sim.SimulatorConfiguration()
+        sim_cfg.scene_dataset_config_file = self.config_file
+        sim_cfg.scene_id = scene_id
+        sim_cfg.enable_physics = False
+        sim_cfg.force_separate_semantic_scene_graph = True
+
+        agent_cfg = habitat_sim.agent.AgentConfiguration()
+
+        rgb_sensor_spec = habitat_sim.CameraSensorSpec()
+        rgb_sensor_spec.uuid = "color_sensor"
+        rgb_sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
+        rgb_sensor_spec.resolution = [self.height, self.width]
+
+        depth_sensor_spec = habitat_sim.CameraSensorSpec()
+        depth_sensor_spec.uuid = "depth_sensor"
+        depth_sensor_spec.sensor_type = habitat_sim.SensorType.DEPTH
+        depth_sensor_spec.resolution = [self.height, self.width]
+
+        agent_cfg.sensor_specifications = [rgb_sensor_spec, depth_sensor_spec]
+
+        agent_cfg.action_space = {
+            "turn_left": habitat_sim.agent.ActionSpec(
+                "turn_left", habitat_sim.agent.ActuationSpec(amount=30.0)
+            ),
+            "turn_right": habitat_sim.agent.ActionSpec(
+                "turn_right", habitat_sim.agent.ActuationSpec(amount=30.0)
+            ),
+            "move_forward": habitat_sim.agent.ActionSpec(
+                "move_forward", habitat_sim.agent.ActuationSpec(amount=0.25)
+            ),
+        }
+
+        return habitat_sim.Configuration(sim_cfg, [agent_cfg])
+
+    def _load_scene(self, scene_id):
+        if hasattr(self, "sim") and self.sim is not None:
+            try:
+                self.sim.close()
+            except Exception:
+                pass
+
+        cfg = self._create_simulator_config(scene_id)
+        try:
+            with _suppress_native_output():
+                self.sim = habitat_sim.Simulator(cfg)
+        except Exception as e:
+            print(f"Error initializing Habitat Simulator: {e}")
+            os.chdir(self.initial_cwd)
+            raise e
+
+        self.scene_id = scene_id
+        self.total_navigable_cells = None
+        self.topdown_base_img = None
+        self.topdown_bounds = None
+        self.topdown_shape = None
+        self.traj_pixels = deque()
+
+    def _resolve_scene_index(self, scene_number):
+        if not self.scene_ids:
+            return 0
+        if scene_number is None:
+            return self.current_scene_index % len(self.scene_ids)
+
+        try:
+            idx = int(scene_number) - 1
+        except (TypeError, ValueError):
+            idx = self.current_scene_index
+        return idx % len(self.scene_ids)
 
     def reset(self, scene_number=None, random_start=False, start_position=None, start_rotation=None):
         self.step_count = 0
@@ -139,7 +191,13 @@ class HabitatEnv:
         self.traj_pixels.clear()
         self.prev_score = 0.0
         self.cumulative_reward = 0.0
-        self.scene_number = scene_number if scene_number is not None else 1
+        scene_index = self._resolve_scene_index(scene_number)
+        target_scene_id = self.scene_ids[scene_index]
+        self.current_scene_index = scene_index
+        self.scene_number = scene_number if scene_number is not None else scene_index + 1
+
+        if target_scene_id != self.scene_id:
+            self._load_scene(target_scene_id)
         
         if self.save_debug_path:
             self.current_ep_dir = os.path.join(self.save_debug_path, f"ep_{getattr(self, 'episode_id', 0):04d}_scene_{self.scene_number}")
@@ -365,9 +423,13 @@ class HabitatEnv:
             return None
 
         h, w = int(self.topdown_shape[0]), int(self.topdown_shape[1])
-        col = int(np.clip((float(x) - min_x) / (max_x - min_x) * (w - 1), 0, w - 1))
-        row_from_bottom = int(np.clip((float(z) - min_z) / (max_z - min_z) * (h - 1), 0, h - 1))
-        row = (h - 1) - row_from_bottom
+        # In get_topdown_view(), the image returned maps:
+        # Real-world X axis -> Image width (axis 1 / cols)
+        # Real-world Z axis -> Image height (axis 0 / rows)
+        col = int(np.clip((float(x) - min_x) / (max_x - min_x) * w, 0, w - 1))
+        row = int(np.clip((float(z) - min_z) / (max_z - min_z) * h, 0, h - 1))
+        
+        # NOTE: returning (col, row) because PIL ImageDraw functions expect (X, Y) coordinates
         return (col, row)
 
     def _save_topdown_step(self, x, z):
@@ -442,8 +504,9 @@ class HabitatEnv:
         return (label,)
 
     def get_actions(self):
-        # Keep same as ThorEnv for compatibility
-        return ["RotateRight", "RotateLeft", "Pass", "MoveAhead", "MoveRight", "MoveLeft", "MoveBack", "Pass"]
+        # Custom simplified actions
+        return ["RotateLeft", "RotateRight", "MoveAhead"]
 
     def close(self):
-        self.sim.close()
+        if hasattr(self, "sim") and self.sim is not None:
+            self.sim.close()

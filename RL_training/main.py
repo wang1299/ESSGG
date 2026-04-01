@@ -1,15 +1,107 @@
 import datetime
+import json
 import os
 import sys
 import signal # Added for signal handling
 from argparse import ArgumentParser
 from pathlib import Path
+import tempfile
 import torch
 # === [关键修改] 先把项目根目录加进去，再 import ===
 sys.path.append("/home/wgy/RL") 
 sys.path.append("/home/wgy/GroundingDINO")
 # === [新增 import] ===
 # from components.detectors.grounding_dino_adapter import GroundingDINODetector
+
+
+def _resolve_habitat_scene_path(hm3d_root, token):
+    token = str(token).strip()
+    if not token:
+        return None
+
+    token_path = Path(token)
+    if token_path.is_file():
+        return str(token_path)
+    if token_path.is_dir():
+        candidates = sorted(token_path.glob("*.basis.glb"))
+        if candidates:
+            return str(candidates[0])
+
+    root = Path(hm3d_root)
+    normalized = token.zfill(5) if token.isdigit() else token
+    search_patterns = [
+        f"val/{normalized}-*/{normalized}*.basis.glb",
+        f"val/{normalized}-*/**/*.basis.glb",
+        f"val/{token}*/{token}*.basis.glb",
+        f"val/{token}*/**/*.basis.glb",
+    ]
+
+    for pattern in search_patterns:
+        matches = sorted(root.glob(pattern))
+        if matches:
+            return str(matches[0])
+
+    return None
+
+
+def _resolve_habitat_scene_list(hm3d_root, single_scene=None, scene_list=None):
+    raw_tokens = []
+    if scene_list:
+        if isinstance(scene_list, str):
+            raw_tokens.extend([part.strip() for part in scene_list.split(",") if part.strip()])
+        else:
+            for item in scene_list:
+                raw_tokens.extend([part.strip() for part in str(item).split(",") if part.strip()])
+    elif single_scene:
+        raw_tokens = [str(single_scene).strip()]
+    else:
+        raw_tokens = ["00800"]
+
+    resolved = []
+    missing = []
+    seen = set()
+    for token in raw_tokens:
+        scene_path = _resolve_habitat_scene_path(hm3d_root, token)
+        if scene_path is None:
+            missing.append(token)
+            continue
+        if scene_path not in seen:
+            resolved.append(scene_path)
+            seen.add(scene_path)
+
+    return resolved, missing
+
+
+def _build_habitat_dataset_config(base_config_file, scene_paths, dataset_root, output_dir=None):
+    with open(base_config_file, "r", encoding="utf-8") as f:
+        config_data = json.load(f)
+
+    selected_names = set()
+    for scene_path in scene_paths:
+        scene_name = Path(scene_path).parent.name
+        if scene_name:
+            selected_names.add(scene_name)
+
+    stage_paths = config_data.get("stages", {}).get("paths", {}).get(".glb", [])
+
+    filtered_stage_paths = []
+    for item in stage_paths:
+        if not any(scene_name in item for scene_name in selected_names):
+            continue
+        filtered_stage_paths.append(str(Path(dataset_root) / item))
+
+    config_data["stages"]["paths"][".glb"] = filtered_stage_paths
+    if "scene_instances" in config_data and "paths" in config_data["scene_instances"]:
+        config_data["scene_instances"]["paths"][".json"] = []
+
+    target_dir = Path(output_dir) if output_dir else Path(tempfile.gettempdir())
+    target_dir.mkdir(parents=True, exist_ok=True)
+    selected_tag = "_".join(sorted(selected_names))
+    target_path = target_dir / f"hm3d_selected_{selected_tag}.scene_dataset_config.json"
+    with open(target_path, "w", encoding="utf-8") as f:
+        json.dump(config_data, f, indent=2)
+
+    return str(target_path)
 
 def main(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -92,13 +184,30 @@ def main(config):
         print("[INFO] Using HabitatEnv for TRAINING...")
         from components.environments.habitat_env import HabitatEnv
         HM3D_ROOT = "/home/wgy/hm3d/scene_datasets/hm3d"
-        SCENE = args.habitat_scene if args.habitat_scene else f"{HM3D_ROOT}/minival/00800-TEEsavR23oF/TEEsavR23oF.basis.glb"
-        DATASET_CFG = f"{HM3D_ROOT}/hm3d_annotated_basis.scene_dataset_config.json"
+        habitat_scene_ids, missing_scenes = _resolve_habitat_scene_list(
+            HM3D_ROOT,
+            single_scene=args.habitat_scene,
+            scene_list=args.habitat_scenes,
+        )
+        if missing_scenes:
+            print(f"[WARNING] The following Habitat scene tokens could not be resolved and will be skipped: {missing_scenes}")
+        if not habitat_scene_ids:
+            habitat_scene_ids = [f"{HM3D_ROOT}/minival/00800-TEEsavR23oF/TEEsavR23oF.basis.glb"]
+        print(f"[INFO] Habitat scenes selected ({len(habitat_scene_ids)}):")
+        for scene_path in habitat_scene_ids:
+            print(f"  - {scene_path}")
+        DATASET_CFG = _build_habitat_dataset_config(
+            f"{HM3D_ROOT}/hm3d_annotated_basis.scene_dataset_config.json",
+            habitat_scene_ids,
+            HM3D_ROOT,
+        )
+        print(f"[INFO] Using filtered Habitat dataset config: {DATASET_CFG}")
         
         env = HabitatEnv(
             dataset_root=HM3D_ROOT,
             config_file=DATASET_CFG,
-            scene_id=SCENE,
+            scene_id=habitat_scene_ids[0],
+            scene_ids=habitat_scene_ids,
             render=env_config["render"],
             use_detector=(dino_detector is not None),
             detector=dino_detector,
@@ -160,10 +269,11 @@ def main(config):
     # [Mod] Pass save_frames_to
     runner = RLTrainRunner(env=env, agent=agent, device=device, save_dir=args.save_frames_to)
     
-    # [New] Override scene numbers for Habitat (since it uses a single scene configuration from args right now)
+    # [New] Habitat uses the runner's scene loop to cycle through the selected scenes.
     if args.use_habitat:
-        runner.total_episodes = agent_config.get("episodes", 10)  # Use config explicitly, fallback to 10
-        agent.scene_numbers = [1]  # Dummy scene number
+        scene_count = max(len(getattr(env, "scene_ids", [])), 1)
+        runner.total_episodes = agent_config.get("episodes", 10) * scene_count
+        agent.scene_numbers = list(range(1, scene_count + 1))
         runner.scene_numbers = agent.scene_numbers
     
     try:
@@ -236,6 +346,7 @@ if __name__ == "__main__":
     # [New] Habitat
     parser.add_argument("--use_habitat", action="store_true", help="Use Habitat instead of AI2Thor.")
     parser.add_argument("--habitat_scene", type=str, default=None, help="Scene ID for Habitat.")
+    parser.add_argument("--habitat_scenes", type=str, default=None, help="Comma-separated Habitat scene IDs or paths.")
     
     args = parser.parse_args()
 
