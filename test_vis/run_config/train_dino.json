@@ -6,16 +6,16 @@
     "alpha": 0.0001,
     "gamma": 0.99,
     "entropy_coef": 0.2,
-    "num_steps": 2000,
+    "num_steps": 4000,
     "encoder_path": "/home/wgy/RL/components/data/model_weights/feature_encoder_15_512_32_512.pth"
   },
   "env_config": {
     "render": false,
-    "rho": 0.001,
-    "det_score_thr": 0.25,
+    "rho": 0.0005,
+    "det_score_thr": 0.20,
     "score_norm_target": 120.0,
     "instance_merge_dist": 0.8,
-    "coverage_cell_size": 0.5,
+    "coverage_cell_size": 0.25,
     "nav_sample_points": 4000,
     "topdown_meters_per_pixel": 0.05
   },

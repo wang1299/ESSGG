@@ -12,7 +12,7 @@ class ReinforceAgent(AbstractAgent):
 
     def __init__(self, env, navigation_config, agent_config, device=None, mapping_path=None):
         super().__init__(env, navigation_config, agent_config, device, mapping_path)
-        # self.entropy_coef = agent_config["entropy_coef"]
+        self.entropy_coef = agent_config.get("entropy_coef", 0.0)
 
     def update(self):
         batch = self._get_update_values()
@@ -41,7 +41,7 @@ class ReinforceAgent(AbstractAgent):
         returns = (returns - returns.mean()) / ret_std
 
         policy_loss = -torch.mean(log_probs * returns)
-        loss = policy_loss  # - self.entropy_coef * entropy
+        loss = policy_loss - self.entropy_coef * entropy
 
         self.optimizer.zero_grad()
         loss.backward()

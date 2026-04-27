@@ -1,4 +1,5 @@
 import json
+import sys
 from collections import deque
 from datetime import datetime
 
@@ -78,7 +79,12 @@ class RLTrainRunner:
         return None
 
     def run(self):
-        pbar = tqdm(total=self.total_episodes, desc="Training Episodes", ncols=160, leave=False)
+        # When stdout/stderr is redirected to a log file (e.g. nohup), tqdm's
+        # carriage-return updates can look truncated. Use plain logging in non-TTY mode.
+        use_tqdm = sys.stderr.isatty()
+        pbar = None
+        if use_tqdm:
+            pbar = tqdm(total=self.total_episodes, desc="Training Episodes", ncols=160, leave=False)
         episode_count = 0
         max_score = 0
 
@@ -184,7 +190,16 @@ class RLTrainRunner:
             }
             if np.isfinite(mean_coverage):
                 postfix["Coverage (last ep)"] = f"{mean_coverage:.3f}"
-            pbar.set_postfix(postfix)
+            if pbar is not None:
+                pbar.set_postfix(postfix)
+            else:
+                coverage_str = f"{mean_coverage:.3f}" if np.isfinite(mean_coverage) else "nan"
+                print(
+                    f"Episode {episode_count:4d} | "
+                    f"Loss={mean_loss:.3f} | Score={mean_score:.2f} | "
+                    f"Steps={mean_steps:4.1f} | Coverage={coverage_str}",
+                    flush=True,
+                )
 
             self.ep_info_buffer.append({"reward": mean_reward, "steps": mean_steps, "score": mean_score, "coverage": mean_coverage})
 
@@ -221,9 +236,11 @@ class RLTrainRunner:
                     print(f"[Coverage] MA Coverage: {mean_coverage_total:6.3f}")
 
             episode_count += 1
-            pbar.update(1)
+            if pbar is not None:
+                pbar.update(1)
 
-        pbar.close()
+        if pbar is not None:
+            pbar.close()
         self.writer.close()
         self.env.close()
         print("\n[INFO] Training finished.")

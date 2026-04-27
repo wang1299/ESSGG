@@ -532,7 +532,7 @@ class SceneGraphLSTMEncoder(nn.Module):
 
 
 class SceneGraphTransformerEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_layers=2, num_heads=4, dropout=0.1, max_len=256):
+    def __init__(self, input_dim, hidden_dim, num_layers=2, num_heads=4, dropout=0.1, max_len=4096):
         super().__init__()
         self.input_proj = nn.Linear(input_dim, hidden_dim)
         self.pos_encoder = PositionalEncoding(hidden_dim, max_len=max_len)
@@ -552,8 +552,9 @@ class SceneGraphTransformerEncoder(nn.Module):
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len=256):
+    def __init__(self, d_model, max_len=4096):
         super().__init__()
+        self.d_model = d_model
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)  # [max_len, 1]
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
@@ -566,4 +567,17 @@ class PositionalEncoding(nn.Module):
         """
         x: [B, T, D]
         """
+        if x.size(1) > self.pe.size(1):
+            device = self.pe.device
+            current_len = self.pe.size(1)
+            new_len = x.size(1)
+            position = torch.arange(current_len, new_len, dtype=torch.float, device=device).unsqueeze(1)
+            div_term = torch.exp(
+                torch.arange(0, self.d_model, 2, dtype=torch.float, device=device) * (-math.log(10000.0) / self.d_model)
+            )
+            extra_pe = torch.zeros(new_len - current_len, self.d_model, device=device)
+            extra_pe[:, 0::2] = torch.sin(position * div_term)
+            extra_pe[:, 1::2] = torch.cos(position * div_term)
+            self.pe = torch.cat([self.pe, extra_pe.unsqueeze(0)], dim=1)
+
         return x + self.pe[:, : x.size(1)]

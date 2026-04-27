@@ -29,11 +29,13 @@ def _resolve_habitat_scene_path(hm3d_root, token):
 
     root = Path(hm3d_root)
     normalized = token.zfill(5) if token.isdigit() else token
+    hash_part = normalized.split('-')[-1]
+
     search_patterns = [
-        f"val/{normalized}-*/{normalized}*.basis.glb",
-        f"val/{normalized}-*/**/*.basis.glb",
-        f"val/{token}*/{token}*.basis.glb",
-        f"val/{token}*/**/*.basis.glb",
+        f"train/{normalized}/{hash_part}.basis.glb",
+        f"train/{normalized}*/**/*.basis.glb",
+        f"val/{normalized}/{hash_part}.basis.glb",
+        f"val/{normalized}*/**/*.basis.glb",
     ]
 
     for pattern in search_patterns:
@@ -96,7 +98,15 @@ def _build_habitat_dataset_config(base_config_file, scene_paths, dataset_root, o
 
     target_dir = Path(output_dir) if output_dir else Path(tempfile.gettempdir())
     target_dir.mkdir(parents=True, exist_ok=True)
-    selected_tag = "_".join(sorted(selected_names))
+    
+    if len(selected_names) <= 3:
+        selected_tag = "_".join(sorted(selected_names))
+    else:
+        import hashlib
+        name_str = "_".join(sorted(selected_names)).encode('utf-8')
+        name_hash = hashlib.md5(name_str).hexdigest()[:8]
+        selected_tag = f"{len(selected_names)}_scenes_{name_hash}"
+
     target_path = target_dir / f"hm3d_selected_{selected_tag}.scene_dataset_config.json"
     with open(target_path, "w", encoding="utf-8") as f:
         json.dump(config_data, f, indent=2)
@@ -217,6 +227,11 @@ def main(config):
             coverage_cell_size=env_config.get("coverage_cell_size", 0.5),
             nav_sample_points=env_config.get("nav_sample_points", 4000),
             topdown_meters_per_pixel=env_config.get("topdown_meters_per_pixel", 0.05),
+            agent_radius=env_config.get("agent_radius", 0.17),
+            agent_height=env_config.get("agent_height", 1.5),
+            agent_max_climb=env_config.get("agent_max_climb", 0.1),
+            navmesh_cell_height=env_config.get("navmesh_cell_height", 0.05),
+            navmesh_cell_size=env_config.get("navmesh_cell_size", 0.03),
             rho=env_config.get("rho", 0.1),
             max_actions=agent_config["num_steps"],
             save_debug_path=args.save_frames_to
