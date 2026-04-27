@@ -3,5 +3,5 @@
   "action_dim": 32,
   "sg_dim": 512,
   "policy_hidden": 512,
-  "use_transformer": true
+  "use_transformer": false
 }
