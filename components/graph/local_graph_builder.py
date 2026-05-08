@@ -57,7 +57,7 @@ class LocalSceneGraphBuilder:
                 continue
 
             object_id = det.get("object_id") or f"det_{i}"
-            name = det.get("class", "unknown")
+            name = det.get("canonical_label") or det.get("class") or det.get("label", "unknown")
 
             position_dict = det.get("position")
             position = tuple(position_dict.values()) if position_dict else (0.0, 0.0, 0.0)

@@ -557,7 +557,7 @@ class PrecomputedThorEnv:
         obs.terminated = terminated
         obs.truncated = truncated
         score, recall_node, recall_edge = self.compute_score(obs)
-        obs.info = {"event": event, "score": score, "recall_node": recall_node, "recall_edge": recall_edge, "action": action, "agent_pos": self.current_pos, "allActionsSuccess": all_success, "max_steps_reached": self.step_count >= self.max_actions}
+        obs.info = {"event": event, "score": score, "object_recall": recall_node, "recall_node": recall_node, "recall_edge": recall_edge, "action": action, "agent_pos": self.current_pos, "allActionsSuccess": all_success, "max_steps_reached": self.step_count >= self.max_actions}
         obs.reward = self._compute_reward(obs)
         return obs
     

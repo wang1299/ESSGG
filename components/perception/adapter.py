@@ -16,7 +16,7 @@ def dets_to_thor_objects(dets, score_thr=0.3, frame_idx=0):
         if score < score_thr:
             continue
 
-        cls = d.get("class") or d.get("name") or "unknown"
+        cls = d.get("canonical_label") or d.get("class") or d.get("label") or d.get("name") or "unknown"
         bbox = d.get("bbox", None)
 
         obj_id = d.get("object_id") or d.get("objectId")

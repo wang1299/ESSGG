@@ -61,7 +61,8 @@ class GroundingDINODetector:
             image=image_tensor,
             caption=self.text_prompt,
             box_threshold=self.box_threshold,
-            text_threshold=self.text_threshold
+            text_threshold=self.text_threshold,
+            device=self.device,
         )
         
         # OOM Fix: Clean up

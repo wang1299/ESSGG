@@ -10,9 +10,10 @@ from torch.distributions import Categorical
 from components.models.feature_encoder import FeatureEncoder
 from components.models.navigation_policy import NavigationPolicy
 from components.utils.rollout_buffer import RolloutBuffer
+from components.agents.batch_agent_mixin import BatchAgentMixin
 
 
-class AbstractAgent(nn.Module):
+class AbstractAgent(nn.Module, BatchAgentMixin):
     """
     Gemeinsame Basis für Policy-Gradient-Agenten (REINFORCE, A2C, etc.)
     """

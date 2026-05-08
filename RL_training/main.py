@@ -152,6 +152,7 @@ def main(config):
 
     if args.use_dino:
         from components.detectors.grounding_dino_adapter import GroundingDINODetector
+        from components.perception.hm3d_labels import HM3D_DINO_PROMPT
         print("[INFO] Initializing Grounding DINO Detector...")
         dino_device = os.environ.get("DINO_DEVICE", "").strip() or None
         if dino_device is not None:
@@ -163,20 +164,20 @@ def main(config):
         if not os.path.exists(dino_weights):
             print(f"[WARNING] DINO weights not found at {dino_weights}. Running without detector.")
         else:
+            dino_text_prompt = str(env_config.get("dino_text_prompt", HM3D_DINO_PROMPT))
+            dino_box_threshold = float(env_config.get("dino_box_threshold", 0.35))
+            dino_text_threshold = float(env_config.get("dino_text_threshold", 0.30))
+            print(
+                f"[INFO] DINO HM3D prompt with {dino_text_prompt.count('.')} labels; "
+                f"box_threshold={dino_box_threshold:.2f}, text_threshold={dino_text_threshold:.2f}"
+            )
             dino_detector = GroundingDINODetector(
                 config_path=dino_config,
                 checkpoint_path=dino_weights,
                 device=dino_device,
-                # Updated text prompt using exactly the 64 categories from object_types.json
-                # Removed 'House Plant', 'Sink Basin', 'Stove Burner', 'Stove Knob' spaces to match JSON keys better or rely on mapping
-                # But actually DINO needs natural language.
-                # Let's clean up the prompt to be natural language but covering all 64 categories.
-                # Note: "SinkBasin" in json -> "Sink Basin" in prompt is good.
-                # JSON: Cabinet, CounterTop, Faucet, Floor, HousePlant, Microwave, Pot, Potato, SinkBasin, SoapBottle, StoveBurner, StoveKnob, Window, Apple, Chair, DiningTable, Plate, Bowl, Knife, Pan, Tomato, Drawer, GarbageCan, Fridge, Bread, Lettuce, Sink, Spatula, Toaster, Cup, PepperShaker, SaltShaker, ButterKnife, Spoon, CoffeeMachine, LightSwitch, Mug, DishSponge, Fork, Ladle, WineBottle, CellPhone, Kettle, Egg, PaperTowelRoll, Book, CreditCard, Stool, Blinds, AluminumFoil, Mirror, Shelf, SideTable, ShelvingUnit, Statue, Vase, Bottle, GarbageBag, Pencil, Curtains, SprayBottle, Pen, Safe, Wall
-                
-                text_prompt="Cabinet . Counter Top . Faucet . Floor . House Plant . Microwave . Pot . Potato . Sink Basin . Soap Bottle . Stove Burner . Stove Knob . Window . Apple . Chair . Dining Table . Plate . Bowl . Knife . Pan . Tomato . Drawer . Garbage Can . Fridge . Bread . Lettuce . Sink . Spatula . Toaster . Cup . Pepper Shaker . Salt Shaker . Butter Knife . Spoon . Coffee Machine . Light Switch . Mug . Dish Sponge . Fork . Ladle . Wine Bottle . Cell Phone . Kettle . Egg . Paper Towel Roll . Book . Credit Card . Stool . Blinds . Aluminum Foil . Mirror . Shelf . Side Table . Shelving Unit . Statue . Vase . Bottle . Garbage Bag . Pencil . Curtains . Spray Bottle . Pen . Safe . Wall .",
-                box_threshold=0.20,
-                text_threshold=0.20
+                text_prompt=dino_text_prompt,
+                box_threshold=dino_box_threshold,
+                text_threshold=dino_text_threshold
             )
 
     # When DINO is enabled, reserve GPU0 for detector by default.

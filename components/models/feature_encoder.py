@@ -11,6 +11,7 @@ import torchvision.transforms as T
 from torch_geometric.data import Data, HeteroData
 from torchvision.models import resnet18, ResNet18_Weights
 
+from components.graph.RelationExtractor import RelationExtractor
 from components.models.graph_encoder import NodeEdgeHGTEncoder
 
 
@@ -32,7 +33,7 @@ class FeatureEncoder(nn.Module):
         map_dim=64,
         sg_dim=256,
         obj_embedding_dim=128,
-        max_object_types=1000,
+        max_object_types=5000,
         rel_embedding_dim=64,
         max_relation_types=50,
         use_transformer=False,
@@ -55,6 +56,7 @@ class FeatureEncoder(nn.Module):
 
         self.object_to_idx = {}
         self.relation_to_idx = {}  # New mapping for relations
+        self.relation_extractor = RelationExtractor()
 
         self.max_object_types = max_object_types
         self.max_relation_types = max_relation_types
@@ -64,6 +66,9 @@ class FeatureEncoder(nn.Module):
         self.mapping_path = mapping_path
         if mapping_path and os.path.exists(os.path.join(mapping_path, "object_types.json")):
             self.load_mappings(mapping_path)
+
+        if not self.relation_to_idx:
+            self.relation_to_idx = self.relation_extractor.get_all_relation_types_with_index()
 
         relation_types = list(self.relation_to_idx.keys())
         graph_encoder_in_channels = 4 + obj_embedding_dim  # Node features: visibility + pos (x, y, z) + obj_embedding
@@ -77,6 +82,24 @@ class FeatureEncoder(nn.Module):
 
         self.object_count = len(self.object_to_idx)
         self.relation_count = len(self.relation_to_idx)
+
+    @staticmethod
+    def _normalize_object_name(name):
+        raw_name = str(name).strip()
+        if not raw_name:
+            return "unknown"
+
+        cleaned = re.sub(r"[^0-9A-Za-z]+", "", raw_name)
+        if not cleaned:
+            return "unknown"
+
+        tokens = re.findall(r"[A-Z]?[a-z]+|[0-9]+", raw_name)
+        if len(tokens) <= 3 and len(cleaned) <= 24:
+            return cleaned.lower()
+
+        if len(tokens) >= 2:
+            return (tokens[0] + tokens[1]).lower()
+        return cleaned.lower()
 
     @staticmethod
     def preprocess_rgb(rgb_list):
@@ -125,8 +148,15 @@ class FeatureEncoder(nn.Module):
         object_type_indices = []
         visibilities = []
         for node in sg.nodes.values():
-            node_positions.append(node.position)
-            obj_type_idx = self.object_to_idx.setdefault(node.name, len(self.object_to_idx))
+            node_positions.append(tuple(float(v) for v in node.position))
+            normalized_name = self._normalize_object_name(node.name)
+            obj_type_idx = self.object_to_idx.setdefault(normalized_name, len(self.object_to_idx))
+            if obj_type_idx >= self.max_object_types:
+                print(f"[WARNING] obj_type_idx {obj_type_idx} >= max_object_types {self.max_object_types} for node {node.name} -> {normalized_name}")
+                obj_type_idx = self.max_object_types - 1
+            elif obj_type_idx < 0:
+                print(f"[WARNING] obj_type_idx {obj_type_idx} < 0 for node {node.name} -> {normalized_name}")
+                obj_type_idx = 0
             object_type_indices.append(obj_type_idx)
             visibilities.append(getattr(node, "visibility", 1.0))
         obj_indices_tensor = torch.tensor(object_type_indices, dtype=torch.long, device=device)
@@ -138,14 +168,20 @@ class FeatureEncoder(nn.Module):
 
         # --- Edge Index + Attr ---
         for rel_type in self.relation_to_idx:
+            rel_type_idx = self.relation_to_idx.get(rel_type)
+            if rel_type_idx is None:
+                continue
+            if rel_type_idx < 0 or rel_type_idx >= self.max_relation_types:
+                print(f"[WARNING] rel_type_idx {rel_type_idx} out of range for relation {rel_type}")
+                continue
+
             sources, targets, edge_attr_idx = [], [], []
             for edge in sg.edges:
                 if edge.relation == rel_type:
                     if edge.source in node_id_map and edge.target in node_id_map:
                         sources.append(node_id_map[edge.source])
                         targets.append(node_id_map[edge.target])
-                        idx = self.relation_to_idx[rel_type]
-                        edge_attr_idx.append(idx)
+                        edge_attr_idx.append(rel_type_idx)
             edge_type = ("object", rel_type, "object")
             if sources:
                 data[edge_type].edge_index = torch.tensor([sources, targets], dtype=torch.long, device=device)
@@ -323,12 +359,16 @@ class FeatureEncoder(nn.Module):
         relation_types_file = os.path.join(path, "relation_types.json")
         if os.path.exists(object_types_file):
             with open(object_types_file, "r") as f:
-                self.object_to_idx = json.load(f)
-                self.object_to_idx = {k: int(v) for k, v in self.object_to_idx.items()}
+                loaded_object_to_idx = json.load(f)
+                normalized_object_to_idx = {}
+                for key, value in loaded_object_to_idx.items():
+                    normalized_key = self._normalize_object_name(key)
+                    normalized_object_to_idx[normalized_key] = min(int(value), self.max_object_types - 1)
+                self.object_to_idx = normalized_object_to_idx
         if os.path.exists(relation_types_file):
             with open(relation_types_file, "r") as f:
                 self.relation_to_idx = json.load(f)
-                self.relation_to_idx = {k: int(v) for k, v in self.relation_to_idx.items()}
+                self.relation_to_idx = {k: min(int(v), self.max_relation_types - 1) for k, v in self.relation_to_idx.items()}
 
     def save_model(self, path):
         """

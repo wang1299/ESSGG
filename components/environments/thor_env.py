@@ -587,6 +587,7 @@ class ThorEnv:
         obs.info = {
             "event": event,
             "score": score,
+            "object_recall": recall_node,
             "recall_node": recall_node,
             "recall_edge": recall_edge,
             "num_discovered": num_discovered,

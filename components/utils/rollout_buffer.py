@@ -46,12 +46,20 @@ class RolloutBuffer:
         self.is_first_add = True
 
     def add(self, state, action, reward, done, hiddens, last_action, agent_position):
-        # hiddens is a tuple of (lssg_hidden, gssg_hidden, policy_hidden)
+        # hiddens may be a tuple/list of (lssg_hidden, gssg_hidden, policy_hidden)
+        # or a dict with keys 'lssg', 'gssg', 'policy'.
+        if isinstance(hiddens, dict):
+            lssg_hidden = hiddens.get("lssg")
+            gssg_hidden = hiddens.get("gssg")
+            policy_hidden = hiddens.get("policy")
+        else:
+            lssg_hidden, gssg_hidden, policy_hidden = hiddens
+
         if self.is_first_add:
             # Store initial hidden states on the very first add after a clear
-            self.initial_lssg_hidden = hiddens[0]
-            self.initial_gssg_hidden = hiddens[1]
-            self.initial_policy_hidden = hiddens[2]
+            self.initial_lssg_hidden = lssg_hidden
+            self.initial_gssg_hidden = gssg_hidden
+            self.initial_policy_hidden = policy_hidden
             self.is_first_add = False
 
         s_rgb, s_lssg, s_gssg, s_occ = state
@@ -70,9 +78,15 @@ class RolloutBuffer:
         Adds a whole batch of transitions to the buffer at once.
         """
         if self.is_first_add and hiddens:
-            self.initial_lssg_hidden = hiddens[0][0]
-            self.initial_gssg_hidden = hiddens[0][1]
-            self.initial_policy_hidden = hiddens[0][2]
+            first_hidden = hiddens[0]
+            if isinstance(first_hidden, dict):
+                self.initial_lssg_hidden = first_hidden.get("lssg")
+                self.initial_gssg_hidden = first_hidden.get("gssg")
+                self.initial_policy_hidden = first_hidden.get("policy")
+            else:
+                self.initial_lssg_hidden = first_hidden[0]
+                self.initial_gssg_hidden = first_hidden[1]
+                self.initial_policy_hidden = first_hidden[2]
             self.is_first_add = False
 
         if states:

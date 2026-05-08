@@ -83,6 +83,7 @@ class RLEvalRunner:
 
         while episode_count < self.total_episodes:
             episode_scores = []
+            episode_object_recalls = []
             episode_steps = []
             episode_rewards = []
 
@@ -117,31 +118,37 @@ class RLEvalRunner:
                     continue
 
                 final_score = obs.info.get("score", 0.0)
+                final_object_recall = obs.info.get("object_recall", obs.info.get("recall_node", final_score))
                 episode_scores.append(final_score)
+                episode_object_recalls.append(final_object_recall)
                 episode_steps.append(episode_steps_scene)
                 episode_rewards.append(episode_reward)
 
             mean_score = np.mean(episode_scores)
+            mean_object_recall = np.mean(episode_object_recalls)
             mean_steps = np.mean(episode_steps)
             mean_reward = np.mean(episode_rewards)
 
             # --- Logging ---
             self.writer.add_scalar("last_episode/Mean_Score", mean_score, episode_count)
+            self.writer.add_scalar("last_episode/Mean_Object_Recall", mean_object_recall, episode_count)
             self.writer.add_scalar("last_episode/Mean_Steps", mean_steps, episode_count)
             self.writer.add_scalar("last_episode/Mean_Reward", mean_reward, episode_count)
             if hasattr(self.env, "rho"):
                 self.writer.add_scalar("env/rho", self.env.rho, episode_count)
 
-            pbar.set_postfix({"Mean Score (last ep)": f"{mean_score:.2f}", "Mean Steps (last ep)": f"{mean_steps:4.1f}"})
+            pbar.set_postfix({"Mean Object Recall (last ep)": f"{mean_object_recall:.2f}", "Mean Score (last ep)": f"{mean_score:.2f}", "Mean Steps (last ep)": f"{mean_steps:4.1f}"})
 
-            self.ep_info_buffer.append({"reward": mean_reward, "steps": mean_steps, "score": mean_score})
+            self.ep_info_buffer.append({"reward": mean_reward, "steps": mean_steps, "score": mean_score, "object_recall": mean_object_recall})
 
             # Moving averages
             recent_scores = [ep["score"] for ep in list(self.ep_info_buffer)]
+            recent_object_recalls = [ep["object_recall"] for ep in list(self.ep_info_buffer)]
             recent_steps = [ep["steps"] for ep in list(self.ep_info_buffer)]
             recent_rewards = [ep["reward"] for ep in list(self.ep_info_buffer)]
 
             mean_score_total = np.mean(recent_scores) if recent_scores else 0
+            mean_object_recall_total = np.mean(recent_object_recalls) if recent_object_recalls else 0
             mean_steps_total = np.mean(recent_steps) if recent_steps else 0
             mean_reward_total = np.mean(recent_rewards) if recent_rewards else 0
 
@@ -151,6 +158,7 @@ class RLEvalRunner:
             self.writer.add_scalar("Rollout/Mean_Reward", mean_reward_total, episode_count)
             self.writer.add_scalar("Rollout/Mean_Steps", mean_steps_total, episode_count)
             self.writer.add_scalar("Rollout/Mean_Score", mean_score_total, episode_count)
+            self.writer.add_scalar("Rollout/Mean_Object_Recall", mean_object_recall_total, episode_count)
             if mean_score_total > 0:
                 self.writer.add_scalar("Rollout/Steps_for_score_1", mean_steps_total / mean_score_total, episode_count)
 
@@ -158,7 +166,7 @@ class RLEvalRunner:
             if episode_count % 5 == 0:
                 print(
                     f"\nEp {episode_count:4d} | "
-                    f"MA Score: {mean_score_total:5.2f} | Max Score: {max_score:5.2f} | "
+                    f"MA Object Recall: {mean_object_recall_total:5.2f} | MA Score: {mean_score_total:5.2f} | Max Score: {max_score:5.2f} | "
                     f"MA Steps: {mean_steps_total:5.1f} | MA Reward: {mean_reward_total:6.2f}"
                 )
 
